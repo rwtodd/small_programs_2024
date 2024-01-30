@@ -9,7 +9,9 @@ param(
   [string[]]$infiles,
   [string]$CredentialFile = (Join-Path $PSScriptRoot "un_pw.json"),
   [scriptblock]$WikiName = { $_.BaseName -replace '_',' ' },
-  [scriptblock]$WikiComment = { "Upload of $($_.Name)" }
+  [scriptblock]$WikiComment = { "Upload of $($_.Name)" },
+  [switch]$CreateOnly, # don't edit an existing page...
+  [switch]$EditOnly # only edit an existing page...
 )
 BEGIN {
   # Make sure the un_pw.json file is present... 
@@ -57,11 +59,13 @@ BEGIN {
 }
 PROCESS {
   foreach ($fl in $infiles) {
+    Write-Verbose "The Next file is $fl"
+
     $my_wname = &$WikiName $fl
     Write-Verbose "Name on the Wiki will be <$my_wname>"
 
     $my_comment = &$WikiComment $fl
-    Write-Verbose "The upload comment will be <$my_comment>"
+    Write-Verbose "The upload comment (summary) will be <$my_comment>"
 
     if ($PSCmdlet.ShouldProcess($fl, "Upload File")) {
       # Step 4: POST request to edit a page
@@ -70,10 +74,24 @@ PROCESS {
         "title" = $my_wname
         "token" = $csrf_token
         "format" = "json"
+        "summary" = $my_comment
         "text" = (Get-Content -Raw -Encoding utf8NoBOM -Path $fl)
       }
+      if($CreateOnly) {
+         $params_3['createonly'] = "true"
+      }
+      if($EditOnly) {
+         $params_3['nocreate'] = "true"
+      }
     
-      Invoke-RestMethod -Uri $wiki.url -Method Post -WebSession $WikiSession -Body $params_3
+      $response = Invoke-RestMethod -Uri $wiki.url -Method Post -WebSession $WikiSession -Body $params_3
+      Write-Verbose $response
+      if($response.edit.result -ne "success") {
+        Write-Error "Got result of <$($response.edit.result)> while uploading <$fl>!"
+        Write-Error "See https://www.mediawiki.org/wiki/API:Edit"
+        Exit 1
+      }
+      Write-Output "# rm $fl"
     }
   }
 }
