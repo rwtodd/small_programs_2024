@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+
+import argparse
+import fileinput
+from rwt import wikitoc
+
+parser = argparse.ArgumentParser(description="Convert an XML representation to a wikibook table of contents")
+parser.add_argument('--nav-template', action='store_true', help="Print the code for the generic navigation template")
+parser.add_argument('--xml-template', action='store_true', help="Print a starter XML file.")
+parser.add_argument('-p', '--page-wrappers', action='store_true', help="Print the page wrappers.")
+parser.add_argument('-s', '--skeleton-files', action='store_true', help="Put page wrappers in skeleton files")
+parser.add_argument('-c', '--contents', action='store_true', help="Just print out the contents page")
+parser.add_argument('filename', type=str, default=None, nargs='?')
+
+args = parser.parse_args()
+
+if args.nav_template:
+    print(wikitoc.generate_nav_page())
+
+if args.xml_template:
+    print('''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<book>
+  <author short="???">???</author>
+  <title short="???" page="???">???</title>
+  <date>???</date>
+  <chapters>
+    <raw>???</raw>
+    <c short="???" page="???">???</c>
+  </chapters>
+</book>''')
+
+if args.filename is None:
+    import sys
+    sys.exit(0)
+
+wb = wikitoc.parse_file(args.filename)
+if args.contents:
+    print(wb.generate_toc())
+
+if args.page_wrappers:
+    for n in range(len(wb)):
+        pg = wb.page_or_toc(n)
+        print()
+        print(f'Filename is {pg.filename()} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        print(wb.generate_page_template(n))
+
+if args.skeleton_files:
+    with open('table-of-contents.wikitext') as f:
+        f.write(wb.generate_toc())
+
+    for n in range(len(wb)):
+        fname = wb.page_or_toc(n).filename()
+        with open(fname,'w') as f:
+            f.write(wb.generate_page_template(n))
+
