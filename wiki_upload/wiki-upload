@@ -26,11 +26,11 @@ def perform_uploads(session, files, comment):
     for file in files:
         basename = os.path.basename(file)
         _, ext = os.path.splitext(basename)
-        comment = comment.replace('{}',basename)
+        expanded_comment = comment.replace('{}',basename)
         if ext.lower() in IMAGE_EXTS:
-            check_response(session.upload_from_file(file, comment))
+            check_response(session.upload_from_file(file, expanded_comment))
         else:
-            check_response(session.edit_from_file(file, comment))
+            check_response(session.edit_from_file(file, expanded_comment))
         print(file)  # print a running list of files, which makes it easy to remove them if needed
 
 def perform_download(session, title, as_html):
