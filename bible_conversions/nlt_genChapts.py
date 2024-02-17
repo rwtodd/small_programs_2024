@@ -79,6 +79,118 @@ class ParseStrat: # parser strategies...
     def data(self, parent, data):
         return self
 
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Note Text ParseStrats ~~~~~~~~~~~~~~~~~~~~
+class PassThruA(ParseStrat):
+    def __init__(self, notepara):
+        self._notepara = notepara
+        self._txt = []
+    def data(self, parent, data):
+        self._txt.append(data)
+        return self
+    def etag(self, parent, tag):
+        if tag == 'a':
+            self._notepara.add(''.join(self._txt))
+            return self._notepara
+        return self
+
+class NotePara(ParseStrat):
+    def __init__(self):
+        self._id = None
+        self._txt = []
+    def add(self, txt):
+        self._txt.append(txt)
+    def stag(self, parent, tag, attrs):
+        match tag:
+            case 'a': 
+                self._id = parent.attr(attrs,'id')
+                if not self._id:
+                    raise RuntimeError("note paragraph with no id!")
+                return PassThruA(self)
+            case 'i' | 'em':
+                self.add("''")
+            case 'b' | 'strong':
+                self.add("'''")
+        return self 
+    def etag(self, parent, tag):
+        match tag:
+            case 'p':
+                parent.add_note(self._id,''.join(self._txt))
+                return NoteDiv()
+            case 'i' | 'em':
+                self.add("''")
+            case 'b' | 'strong':
+                self.add("'''")
+        return self
+    def data(self, parent, data):
+        self.add(data)
+        return self
+
+class NoteDiv(ParseStrat):
+    def stag(self, parent, tag, attrs):
+        if tag == 'p' and parent.attr(attrs,'class') == 'bible-text-note':
+            return NotePara()
+        return self 
+    def etag(self, parent, tag):
+        if tag == 'div':
+            return WaitForNoteDiv() 
+        return self
+    
+class WaitForNoteDiv(ParseStrat):
+    def stag(self, parent, tag, attrs):
+        if tag == 'div' and parent.attr(attrs,'class') == 'note':
+            return NoteDiv()
+        return self 
+
+class NotesManager(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._loaded = set() 
+        self._notes = dict() 
+        self._state = WaitForNoteDiv()
+
+    def add_note(self, noteid, note):
+        """Add a note keyed by noteid to the store"""
+        if noteid in self._notes:
+            raise RuntimeError(f'Duplicate noteid {noteid}!')
+        self._notes[noteid] = note
+
+    def load_notes(self, fname):
+        """Load the file fname, and remember we did!"""
+        if fname in self._loaded: return
+        self.reset()
+        self._state = WaitForNoteDiv()
+        with open(fname,'r') as infile:
+            self.feed(infile.read())
+            self.close()
+        self._loaded.add(fname)
+
+    def get_note(self, noteid):
+        return self._notes[noteid]
+
+    def attr(self, attrs, key):
+        """Get the attribute from attrs matching `key`, or None"""
+        _,val = next(filter(lambda a: a[0] == key, attrs),(None,None)) 
+        # RWT print(f'Attributes are {attrs}, got {val} for {key}.')
+        return val
+
+    def handle_starttag(self, tag, attrs):
+        self._state = self._state.stag(self, tag, attrs) 
+        # print('after start',tag,'now state is',self._state) #RWT
+
+    def handle_endtag(self, tag):
+        self._state = self._state.etag(self, tag) 
+        # print('after end',tag,'now state is',self._state) #RWT
+
+    def handle_data(self, data):
+        self._state = self._state.data(self, data) 
+        # print('after data',data[0:5],'now state is',self._state) #RWT
+
+# <div class="note">
+#   <p class="bible-text-note"><a href="x1genesis_1.html#note_marker_2" id="note_2">[<span class="tn-ref">1:26a</span>]</a>  Or <em>man;</em> Hebrew reads <em>adam.</em></p>
+# </div>
+
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Body Text ParseStrats ~~~~~~~~~~~~~~~~~~~~
 class WaitForP(ParseStrat):
     """Waiting for a paragraph to appear"""
     def stag(self, parent, tag, attrs):
@@ -137,8 +249,30 @@ class SmallCaps(ParseStrat):
             return self._prevState
         raise RuntimeError(f"Should only have closing </span> in smallcaps but got </{tag}>!")
 
+class NoteMarker(ParseStrat):
+    def __init__(self, prevState):
+        self._prevState = prevState
+    def data(self, parent, data):
+        if data == '[*]':
+           parent.output('<sup>[*]</sup>')
+           return self
+        raise RuntimeError(f"Should only get [*] in a note, but got <{data}>!")
+    def stag(self, parent, tag, attrs):
+        if tag == 'a' and (href := parent.attr(attrs,'href')):
+            html_file,note_name = href.split('#',1)
+            parent.add_note(html_file, note_name)
+            return self
+        raise RuntimeError(f"Should never have a start tag in NoteMarker but got <{tag} with attrs <{attrs}>!")
+    def etag(self, parent, tag):
+        match tag:
+            case 'span': return self._prevState
+            case 'a': return self # skip!
+            case _: raise RuntimeError(f"Should only have closing </a>,</span> in NoteMarker but got </{tag}>!")
+
 class Paragraph(ParseStrat):
     def __init__(self, parent, poetic=False):
+        self._in_sup = False
+        self._in_sub = False
         if poetic:
             parent.start_poetry()
         else:
@@ -146,13 +280,26 @@ class Paragraph(ParseStrat):
     def stag(self, parent, tag, attrs):
         # look for verse numbers...
         if tag == 'span': 
-            clz = parent.attr(attrs,'class') 
-            match clz:
+            match parent.attr(attrs,'class'):
                 case 'vn': return VerseNumber(self)
                 case 'sc' | 'subhead-sc': return SmallCaps(self, parent)
+                case 'note_marker': return NoteMarker(self)
+                case 'fract-den':
+                    parent.output('<sub>')
+                    self._in_sub = True
+                    return self
+                case 'fract-slash':
+                    return self
         elif tag == 'a':
             if parent.attr(attrs,'id'):
                 return self  # skip on purpose!
+        elif tag == 'sup' and parent.attr(attrs,'class') == 'fract-num':
+            parent.output('<sup>')
+            self._in_sup = True
+            return self
+        elif tag == 'em':
+            parent.output("''")
+            return self
         print(f'warning...unhandled tag <{tag} {attrs}> in paragraph...')
         return self
     def data(self, parent, data):
@@ -162,11 +309,21 @@ class Paragraph(ParseStrat):
         if tag == 'p':
             parent.output('\n\n')
             return WaitForP()
+        elif tag == 'sup' and self._in_sup:
+            parent.output('</sup>')
+            self._in_sup = False
+        elif tag == 'span' and self._in_sub:
+            parent.output('</sub>')
+            self._in_sub = False
+        elif tag == 'em':
+            parent.output("''")
+            return self
         return self
 
 class SubHeading(Paragraph):
     def __init__(self,parent):
         super().__init__(parent)
+        parent.output_notes()
         parent.output('== ')
     def etag(self, parent, tag):
         if tag == 'p':
@@ -197,6 +354,12 @@ class ChapParser(HTMLParser):
         self._state = WaitForP() 
         self._eating_whitespace = False
         self._in_poetry = False
+        self._note_q = []
+        self._note_mgr = NotesManager()
+
+    def close(self):
+        super().close()
+        self.output_notes()
 
     def attr(self, attrs, key):
         """Get the attribute from attrs matching `key`, or None"""
@@ -227,6 +390,22 @@ class ChapParser(HTMLParser):
             s = s.lstrip()
             self._eating_whitespace = False
         self._ofile.write(s)
+
+    def add_note(self, fname, noteid):
+        """Load all notes from fname (unless we already have) and
+        queue noteid for inclusion in the text"""
+        self._note_mgr.load_notes('OEBPS/' + fname)
+        self._note_q.append(noteid)
+
+    def output_notes(self):
+        """Output all queued notes"""
+        if len(self._note_q) == 0: return
+        self.output('<div style="background: #eeeeee; border-left: 2px solid black; padding-left: 0.5em;">')
+        for n in self._note_q:
+            self._ofile.write(self._note_mgr.get_note(n))
+            self._ofile.write('\n\n')
+        self.output('</div>\n\n')
+        self._note_q.clear()
 
     def handle_starttag(self, tag, attrs):
         self._state = self._state.stag(self, tag, attrs) 
