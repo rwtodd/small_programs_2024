@@ -1,6 +1,8 @@
 from rwt.books import books
 import itertools
 from html.parser import HTMLParser
+from io import StringIO
+import re
 
 ODIR='out'
 
@@ -245,23 +247,23 @@ class SmallCaps(ParseStrat):
 
 class BoldSmallCaps(SmallCaps):
     def __init__(self, prevState, parent, tag):
+        parent.output("<b>")
         super().__init__(prevState, parent, tag)
-        self._tag = tag
-        parent.output("'''")
     def etag(self, parent, tag):
+        rval = super().etag(parent,tag)
         if tag == self._tag:
-            parent.output("'''")
-        return super().etag(parent,tag)
+            parent.output("</b>")
+        return rval
 
 class EmphaticSmallCaps(SmallCaps):
     def __init__(self, prevState, parent, tag):
+        parent.output("<i>")
         super().__init__(prevState, parent, tag)
-        self._tag = tag
-        parent.output("''")
     def etag(self, parent, tag):
+        rval = super().etag(parent,tag)
         if tag == self._tag:
-            parent.output("''")
-        return super().etag(parent,tag)
+            parent.output("</i>")
+        return rval
 
 class RedSmallCaps(SmallCaps):
     def __init__(self, prevState, parent):
@@ -319,12 +321,6 @@ class TextSpan(ParseStrat):
                     return RedSmallCaps(self,parent)
                 case 'note_marker': 
                     return NoteMarker(self)
-                case 'fract-den' | 'tn-fract-den':
-                    return FractDenom(self,parent,tag)
-                case 'tn-fract-ital-den':
-                    return ItalicFractDenom(self,parent,tag)
-                case 'fract-slash' | 'tn-fract-slash' | 'tn-fract-ital-slash':
-                    return self  # skip it, and just output the inside slash
                 case 'red':
                     return RedText(self,parent,tag)
                 case 'text-critical-ital':
@@ -337,9 +333,9 @@ class TextSpan(ParseStrat):
         elif tag == 'sup':
             match parent.attr(attrs,'class'):
                 case 'fract-num' | 'tn-fract-num':
-                    return FractNum(self, parent, tag)
+                    return InlineFraction(self, parent, tag)
                 case 'tn-fract-ital-num':
-                    return ItalicFractNum(self, parent, tag)
+                    return ItalicFraction(self, parent, tag)
                 case _:
                     return BareSupTag(self, parent, tag)
         elif tag == 'em' or tag == 'i':
@@ -366,35 +362,73 @@ class RedText(TextSpan):
     def close_action(self,parent):
         parent.output('}}')
 
-class FractDenom(TextSpan):
-    def open_action(self, parent):
-        parent.output('<sub>')
-    def close_action(self, parent):
-        parent.output('</sub>')
+class InlineFraction(ParseStrat):
+    # Phases...
+    NUM = 0
+    SLASH = 1
+    DENOM = 2
 
-class ItalicFractDenom(TextSpan):
-    def open_action(self, parent):
-        parent.output('<sub><i>')
-    def close_action(self, parent):
-        parent.output('</i></sub>')
+    def __init__(self, prevState, parent, tag):
+        self._tag = tag
+        self._prevState = prevState
+        parent.output('{{InlineFraction|')
+        self._phase = self.NUM
+        self._need_s_tag = False
+    def ending(self,parent):
+        parent.output('}}')
+    def stag(self, parent, tag, attrs):
+        if not self._need_s_tag:
+            raise RuntimeError(f"found tag <{tag}> inside a fractional component!")
+        self._need_s_tag = False # now we are inside a tag
+        self._tag = tag # remember the opening tag type
 
-class FractNum(TextSpan):
-    def open_action(self, parent):
-        parent.output('<sup>')
-    def close_action(self, parent):
-        parent.output('</sup>')
+        clz = parent.attr(attrs,'class')
+        if self._phase == self.SLASH:
+            match clz:
+                case 'fract-slash' | 'tn-fract-slash' | 'tn-fract-ital-slash':
+                    return self
+                case _:
+                    raise RuntimeError(f"Got tag <{tag} {attr}> when looking for a fraction flash type!")
+        elif self._phase == self.DENOM:
+            match clz:
+                case 'fract-den' | 'tn-fract-den' | 'tn-fract-ital-den':
+                    return self
+                case _:
+                    raise RuntimeError(f"Got tag <{tag} {attr}> when looking for a fraction denominator type!")
+    def etag(self, parent, tag):
+        if tag != self._tag:
+            raise RuntimeError(f"parsing fraction, got tag </{tag}> when expecting </{self._tag}>")
+        self._need_s_tag = True # now look for an s tag next
+        if self._phase == self.NUM:
+            parent.output('|')
+            self._phase = self.SLASH
+        elif self._phase == self.SLASH:
+            self._phase = self.DENOM
+        elif self._phase == self.DENOM:
+            self.ending(parent)
+            return self._prevState 
+        return self
+    def data(self, parent, data):
+        if self._phase == self.SLASH:
+            if data.strip() != '/':
+                raise RuntimeError(f"parsing fraction, got tag '{data}' when expecting only a slash!")
+        else:
+            parent.output(data)
+        return self
 
-class ItalicFractNum(TextSpan):
-    def open_action(self, parent):
-        parent.output('<sup><i>')
-    def close_action(self, parent):
-        parent.output('</i></sup>')
+class ItalicFraction(InlineFraction):
+    def __init__(self, prevState, parent, tag):
+        parent.output('<i>')
+        super().__init__(prevState, parent, tag)
+    def ending(self,parent):
+        super().ending(parent)
+        parent.output('</i>')
 
 class StrongTag(TextSpan):
     def open_action(self,parent):
-        parent.output("'''")
+        parent.output("<b>")
     def close_action(self,parent):
-        parent.output("'''")
+        parent.output("</b>")
 
 class BareSupTag(TextSpan):
     def open_action(self,parent):
@@ -404,9 +438,9 @@ class BareSupTag(TextSpan):
 
 class EmphasisTag(TextSpan):
     def open_action(self,parent):
-        parent.output("''")
+        parent.output("<i>")
     def close_action(self,parent):
-        parent.output("''")
+        parent.output("</i>")
 
 class NotePara(TextSpan):
     def __init__(self, prevState, parent):
@@ -534,13 +568,24 @@ def parse_chapter(cfname, ofile):
         cp.feed(ifile.read())
         cp.close()
 
+bs_and_is = re.compile(r'</i><i>|</b><b>',re.I)
+num_and_frac = re.compile(r'(\d+){{InlineFraction')
+
+def fixup_wikitext(wt):
+    """Take some rough wikitext, and bash it into shape!"""
+    wt = bs_and_is.sub('',wt)
+    wt = num_and_frac.sub(r'{{InlineFraction|wn=\1',wt)
+    return wt
+
 def generate_chapter(bnum, cnum):
     """Generate a whole chapter's text"""
-    with open(make_chapter_filename(bnum,cnum),'w') as ofile:
-        print(generate_nav(bnum,cnum),file=ofile)
-        parse_chapter(books[bnum]['chapters'][cnum]['file'],ofile)
-        print(f'\n&rarr; {make_long_link(*next_chap(bnum,cnum))} &rarr;',file=ofile)
-        print('[[Category:Bible Texts (NLT)]]', file=ofile)
+    with StringIO() as chap_buff, open(make_chapter_filename(bnum,cnum),'w') as ofile:
+        print(generate_nav(bnum,cnum),file=chap_buff)
+        parse_chapter(books[bnum]['chapters'][cnum]['file'],chap_buff)
+        print(f'\n&rarr; {make_long_link(*next_chap(bnum,cnum))} &rarr;',file=chap_buff)
+        print('[[Category:Bible Texts (NLT)]]', file=chap_buff)
+        contents = fixup_wikitext(chap_buff.getvalue())
+        ofile.write(contents)
 
 def generate_all():
     """Go through all the books and chapters, generating text"""
