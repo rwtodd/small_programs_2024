@@ -3,14 +3,6 @@ import itertools
 from html.parser import HTMLParser
 
 ODIR='out'
-# ~~~~ from existing wikibibles...
-#  {{Bible Old Nav
-#  |1=New Living Translation (NLT)
-#  |2=Genesis 26
-#  |3=[[Genesis 25 (NLT)|GEN 25]]
-#  |4=[[Genesis 27 (NLT)|GEN 27]]}}
-
-# <span id="V1"><sup>'''1'''</sup></span>&nbsp;
 
 # ~~~~~~~
 def vnum(n):
@@ -67,7 +59,7 @@ def generate_nav(bnum, cnum):
 def make_chapter_filename(bnum,cnum):
     """Generate the correct output file name"""
     cbook = books[bnum]
-    return f"{ODIR}/{cbook['long'].replace(' ','_')}_{cbook['chapters'][cnum]['title']}_(NLT).wikitext"
+    return f"{ODIR}/{cbook['long']}_{cbook['chapters'][cnum]['title']}_(NLT).wikitext".replace(' ','_')
 
 class ParseStrat: # parser strategies...
     """ParseStrat derivatives are strategies for HTMLParsers to use. They are (mostly) stateless and always return what the
@@ -79,56 +71,11 @@ class ParseStrat: # parser strategies...
     def data(self, parent, data):
         return self
 
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Note Text ParseStrats ~~~~~~~~~~~~~~~~~~~~
-class PassThruA(ParseStrat):
-    def __init__(self, notepara):
-        self._notepara = notepara
-        self._txt = []
-    def data(self, parent, data):
-        self._txt.append(data)
-        return self
-    def etag(self, parent, tag):
-        if tag == 'a':
-            self._notepara.add(''.join(self._txt))
-            return self._notepara
-        return self
-
-class NotePara(ParseStrat):
-    def __init__(self):
-        self._id = None
-        self._txt = []
-    def add(self, txt):
-        self._txt.append(txt)
-    def stag(self, parent, tag, attrs):
-        match tag:
-            case 'a': 
-                self._id = parent.attr(attrs,'id')
-                if not self._id:
-                    raise RuntimeError("note paragraph with no id!")
-                return PassThruA(self)
-            case 'i' | 'em':
-                self.add("''")
-            case 'b' | 'strong':
-                self.add("'''")
-        return self 
-    def etag(self, parent, tag):
-        match tag:
-            case 'p':
-                parent.add_note(self._id,''.join(self._txt))
-                return NoteDiv()
-            case 'i' | 'em':
-                self.add("''")
-            case 'b' | 'strong':
-                self.add("'''")
-        return self
-    def data(self, parent, data):
-        self.add(data)
-        return self
-
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Note Text-Specific ParseStrats ~~~~~~~~~~~~~~~~~~~~
 class NoteDiv(ParseStrat):
     def stag(self, parent, tag, attrs):
         if tag == 'p' and parent.attr(attrs,'class') == 'bible-text-note':
-            return NotePara()
+            return NotePara(self, parent)
         return self 
     def etag(self, parent, tag):
         if tag == 'div':
@@ -147,12 +94,17 @@ class NotesManager(HTMLParser):
         self._loaded = set() 
         self._notes = dict() 
         self._state = WaitForNoteDiv()
+        self._eating_whitespace = False
+        self._in_poetry = False
+        self._txtbuf = []
 
-    def add_note(self, noteid, note):
+    def add_note_from_output(self, noteid):
         """Add a note keyed by noteid to the store"""
+        if not noteid:
+            raise RuntimeError(f'false noteid was {noteid}!')
         if noteid in self._notes:
             raise RuntimeError(f'Duplicate noteid {noteid}!')
-        self._notes[noteid] = note
+        self._notes[noteid] = self.get_textbuf()
 
     def load_notes(self, fname):
         """Load the file fname, and remember we did!"""
@@ -173,6 +125,46 @@ class NotesManager(HTMLParser):
         # RWT print(f'Attributes are {attrs}, got {val} for {key}.')
         return val
 
+    def eat_whitespace(self):
+        self._eating_whitespace = True
+
+    def start_poetry(self):
+        self._in_poetry = True
+
+    def space_poetry(self):
+        """When we get a -sp class, we need to space out the poetry, if we were already in it"""
+        if self._in_poetry:
+            self.output('\n\n') # should make a total of 3 newlines for 2 blank lines
+
+    def end_poetry(self):
+        """If we were in poetry, end it here"""
+        if self._in_poetry:
+            self._in_poetry = False
+            self.output('\n')
+
+    def output(self, s):
+        """Store data for inclusion in a note"""
+        if self._eating_whitespace:
+            s = s.lstrip()
+            self._eating_whitespace = False
+        self._txtbuf.append(s)
+
+    def get_textbuf(self):
+        """Join all the text so far added to _txtbuf, and return it. clear the _txtbuf"""
+        tb = ''.join(self._txtbuf)
+        self._txtbuf.clear()
+        self._eating_whitespace = False
+        self._in_poetry = False
+        return tb
+
+    def add_note(self, fname, noteid):
+        pass
+
+    def output_notes(self):
+        """Output all queued notes"""
+        pass
+
+
     def handle_starttag(self, tag, attrs):
         self._state = self._state.stag(self, tag, attrs) 
         # print('after start',tag,'now state is',self._state) #RWT
@@ -185,26 +177,27 @@ class NotesManager(HTMLParser):
         self._state = self._state.data(self, data) 
         # print('after data',data[0:5],'now state is',self._state) #RWT
 
-# <div class="note">
-#   <p class="bible-text-note"><a href="x1genesis_1.html#note_marker_2" id="note_2">[<span class="tn-ref">1:26a</span>]</a>  Or <em>man;</em> Hebrew reads <em>adam.</em></p>
-# </div>
-
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Body Text ParseStrats ~~~~~~~~~~~~~~~~~~~~
 class WaitForP(ParseStrat):
     """Waiting for a paragraph to appear"""
     def stag(self, parent, tag, attrs):
-        if tag == 'p':
+        if tag == 'hr' and parent.attr(attrs,'class') == 'text-critical':
+            parent.end_poetry()
+            parent.output_notes()
+            parent.output('----\n\n')   
+        elif tag == 'p':
             clz = parent.attr(attrs,'class')
             # if it is not
             match clz:
                 case 'subhead':
-                    return SubHeading(parent)
-                case 'chapter-number': return self  #skip it!
-                case p if p.find('poet') >= 0:
-                    return PoetryParagraph(parent, p.split('-'))
+                    return SubHeading(self, parent)
+                case 'chapter-number': 
+                    return self  #skip it!
+                case p if p.find('poet') >= 0 or p.find('list') >= 0:
+                    return PoetryParagraph(self, parent, p.split('-'))
                 case _: 
-                    return Paragraph(parent)
+                    return Paragraph(self, parent)
         return self 
 
 class VerseNumber(ParseStrat):
@@ -233,8 +226,9 @@ class FakeSmallCaps(ParseStrat):
         raise RuntimeError(f"Should only have closing </span> in FakeSmallCaps but got </{tag}>!")
 
 class SmallCaps(ParseStrat):
-    def __init__(self, prevState, parent):
+    def __init__(self, prevState, parent, tag='span'):
         self._prevState = prevState
+        self._tag = tag
         parent.output('{{Smallcaps|')
     def data(self, parent, data):
         parent.output(data)
@@ -244,10 +238,40 @@ class SmallCaps(ParseStrat):
             return FakeSmallCaps(self)
         raise RuntimeError(f"Should never have a start tag in smallcaps but got <{tag}>!")
     def etag(self, parent, tag):
-        if tag == 'span':
+        if tag == self._tag:
             parent.output('}}')
             return self._prevState
-        raise RuntimeError(f"Should only have closing </span> in smallcaps but got </{tag}>!")
+        raise RuntimeError(f"Should only have closing </{self._tag}> in smallcaps but got </{tag}>!")
+
+class BoldSmallCaps(SmallCaps):
+    def __init__(self, prevState, parent, tag):
+        super().__init__(prevState, parent, tag)
+        self._tag = tag
+        parent.output("'''")
+    def etag(self, parent, tag):
+        if tag == self._tag:
+            parent.output("'''")
+        return super().etag(parent,tag)
+
+class EmphaticSmallCaps(SmallCaps):
+    def __init__(self, prevState, parent, tag):
+        super().__init__(prevState, parent, tag)
+        self._tag = tag
+        parent.output("''")
+    def etag(self, parent, tag):
+        if tag == self._tag:
+            parent.output("''")
+        return super().etag(parent,tag)
+
+class RedSmallCaps(SmallCaps):
+    def __init__(self, prevState, parent):
+        super().__init__(prevState, parent)
+        parent.output('{{JesusText|')
+    def etag(self, parent, tag):
+        if super().etag(parent,tag) is self._prevState:
+            parent.output('}}')
+            return self._prevState
+        raise RuntimeError(f"Should only have closing </span> in redsmallcaps but got </{tag}>!")
 
 class NoteMarker(ParseStrat):
     def __init__(self, prevState):
@@ -269,83 +293,166 @@ class NoteMarker(ParseStrat):
             case 'a': return self # skip!
             case _: raise RuntimeError(f"Should only have closing </a>,</span> in NoteMarker but got </{tag}>!")
 
-class Paragraph(ParseStrat):
-    def __init__(self, parent, poetic=False):
-        self._in_sup = False
-        self._in_sub = False
-        if poetic:
-            parent.start_poetry()
-        else:
-            parent.end_poetry()
+class TextSpan(ParseStrat):
+    """Read a span just like a paragraph, just remember to end on span"""
+    def __init__(self, prevState, parent, tag):
+        self._prevState = prevState
+        self._tag = tag
+        self.open_action(parent)
+    def open_action(self, parent):
+        """What to do when we see the opening tag"""
+        pass
+    def close_action(self, parent):
+        """What to do when we see the closing tag"""
+        pass
     def stag(self, parent, tag, attrs):
         # look for verse numbers...
         if tag == 'span': 
             match parent.attr(attrs,'class'):
-                case 'vn': return VerseNumber(self)
-                case 'sc' | 'subhead-sc': return SmallCaps(self, parent)
-                case 'note_marker': return NoteMarker(self)
-                case 'fract-den':
-                    parent.output('<sub>')
-                    self._in_sub = True
-                    return self
-                case 'fract-slash':
-                    return self
+                case 'vn': 
+                    return VerseNumber(self)
+                case 'sc' | 'subhead-sc' | 'tn-sc' | 'psa-book-sc' | 'psa-title-sc': 
+                    return SmallCaps(self, parent)
+                case 'tn-ref-bold-sc':
+                    return BoldSmallCaps(self, parent, tag)
+                case 'red-sc': 
+                    return RedSmallCaps(self,parent)
+                case 'note_marker': 
+                    return NoteMarker(self)
+                case 'fract-den' | 'tn-fract-den':
+                    return FractDenom(self,parent,tag)
+                case 'tn-fract-ital-den':
+                    return ItalicFractDenom(self,parent,tag)
+                case 'fract-slash' | 'tn-fract-slash' | 'tn-fract-ital-slash':
+                    return self  # skip it, and just output the inside slash
+                case 'red':
+                    return RedText(self,parent,tag)
+                case 'text-critical-ital':
+                    return EmphasisTag(self,parent,tag)
+                case 'tn-ref':
+                    return StrongTag(self,parent,tag)
         elif tag == 'a':
             if parent.attr(attrs,'id'):
                 return self  # skip on purpose!
-        elif tag == 'sup' and parent.attr(attrs,'class') == 'fract-num':
-            parent.output('<sup>')
-            self._in_sup = True
-            return self
-        elif tag == 'em':
-            parent.output("''")
-            return self
-        print(f'warning...unhandled tag <{tag} {attrs}> in paragraph...')
+        elif tag == 'sup':
+            match parent.attr(attrs,'class'):
+                case 'fract-num' | 'tn-fract-num':
+                    return FractNum(self, parent, tag)
+                case 'tn-fract-ital-num':
+                    return ItalicFractNum(self, parent, tag)
+                case _:
+                    return BareSupTag(self, parent, tag)
+        elif tag == 'em' or tag == 'i':
+            if parent.attr(attrs,'class') == 'tn-sc-ital':
+                return EmphaticSmallCaps(self,parent,tag)
+            return EmphasisTag(self, parent, tag)
+        elif tag == 'strong' or tag == 'b':
+            return StrongTag(self, parent, tag)
+        print(f'warning...unhandled tag <{tag} {attrs}> in text span...')
         return self
     def data(self, parent, data):
         parent.output(data)
         return self
     def etag(self, parent, tag):
-        if tag == 'p':
-            parent.output('\n\n')
-            return WaitForP()
-        elif tag == 'sup' and self._in_sup:
-            parent.output('</sup>')
-            self._in_sup = False
-        elif tag == 'span' and self._in_sub:
-            parent.output('</sub>')
-            self._in_sub = False
-        elif tag == 'em':
-            parent.output("''")
-            return self
+        """Go back to the previous state once we see the closing tag"""
+        if tag == self._tag:
+            self.close_action(parent)
+            return self._prevState
         return self
 
+class RedText(TextSpan):
+    def open_action(self,parent):
+        parent.output('{{JesusText|')
+    def close_action(self,parent):
+        parent.output('}}')
+
+class FractDenom(TextSpan):
+    def open_action(self, parent):
+        parent.output('<sub>')
+    def close_action(self, parent):
+        parent.output('</sub>')
+
+class ItalicFractDenom(TextSpan):
+    def open_action(self, parent):
+        parent.output('<sub><i>')
+    def close_action(self, parent):
+        parent.output('</i></sub>')
+
+class FractNum(TextSpan):
+    def open_action(self, parent):
+        parent.output('<sup>')
+    def close_action(self, parent):
+        parent.output('</sup>')
+
+class ItalicFractNum(TextSpan):
+    def open_action(self, parent):
+        parent.output('<sup><i>')
+    def close_action(self, parent):
+        parent.output('</i></sup>')
+
+class StrongTag(TextSpan):
+    def open_action(self,parent):
+        parent.output("'''")
+    def close_action(self,parent):
+        parent.output("'''")
+
+class BareSupTag(TextSpan):
+    def open_action(self,parent):
+        parent.output("<sup>")
+    def close_action(self,parent):
+        parent.output("</sup>")
+
+class EmphasisTag(TextSpan):
+    def open_action(self,parent):
+        parent.output("''")
+    def close_action(self,parent):
+        parent.output("''")
+
+class NotePara(TextSpan):
+    def __init__(self, prevState, parent):
+        super().__init__(prevState, parent, 'p')
+        self._id = None
+    def open_action(self, parent):
+        self._id = None
+    def close_action(self, parent):
+        parent.add_note_from_output(self._id)
+    def stag(self, parent, tag, attrs):
+        if tag == 'a':
+            self._id = parent.attr(attrs,'id')
+            if not self._id:
+                raise RuntimeError('note paragraph with no id!')
+        return super().stag(parent, tag, attrs)
+
+class Paragraph(TextSpan):
+    """A text span on <p> that might or might not be poetry"""
+    def __init__(self, prevState, parent, poetic=False):
+        if poetic:
+            parent.start_poetry()
+        else:
+            parent.end_poetry()
+        super().__init__(prevState, parent, 'p')
+    def close_action(self, parent):
+        parent.output('\n\n')
+
 class SubHeading(Paragraph):
-    def __init__(self,parent):
-        super().__init__(parent)
+    def open_action(self, parent):
         parent.output_notes()
         parent.output('== ')
-    def etag(self, parent, tag):
-        if tag == 'p':
-            parent.output(' ==\n')
-            return WaitForP()
-        raise RuntimeError(f"Should only have closing </p> in SubHeading but got </{tag}>!")
+    def close_action(self, parent):
+        parent.output(' ==\n')
 
 class PoetryParagraph(Paragraph):
-    def __init__(self, parent, parts):
+    def __init__(self, prevState, parent, parts):
         if 'sp' in parts: parent.space_poetry()  # must do this before super()
-        super().__init__(parent, poetic=True)
+        super().__init__(prevState, parent, poetic=True)
         indent = 4  # in ems
         if 'vn' in parts: indent = indent - 1 
         if 'ext' in parts: indent = indent + 1
         if 'poet2' in parts: indent = indent + 2
         if 'poet3' in parts: indent = indent + 4
         parent.output(f'<span style="padding-left: {indent}em">')
-    def etag(self, parent, tag):
-        if tag == 'p':
-            parent.output('</span><br/>\n')
-            return WaitForP()
-        return self
+    def close_action(self, parent):
+        parent.output('</span><br/>\n')
 
 class ChapParser(HTMLParser):
     def __init__(self, ofile):
@@ -359,6 +466,7 @@ class ChapParser(HTMLParser):
 
     def close(self):
         super().close()
+        self.end_poetry()
         self.output_notes()
 
     def attr(self, attrs, key):
@@ -376,7 +484,7 @@ class ChapParser(HTMLParser):
     def space_poetry(self):
         """When we get a -sp class, we need to space out the poetry, if we were already in it"""
         if self._in_poetry:
-            self.output('\n\n')
+            self.output('\n\n') # should make a total of 3 newlines for 2 blank lines
 
     def end_poetry(self):
         """If we were in poetry, end it here"""
@@ -400,7 +508,7 @@ class ChapParser(HTMLParser):
     def output_notes(self):
         """Output all queued notes"""
         if len(self._note_q) == 0: return
-        self.output('<div style="background: #eeeeee; border-left: 2px solid black; padding-left: 0.5em;">')
+        self.output('<div style="background: #eeeeee; border-left: 2px solid black; padding: 0.5em;">')
         for n in self._note_q:
             self._ofile.write(self._note_mgr.get_note(n))
             self._ofile.write('\n\n')
@@ -437,6 +545,8 @@ def generate_chapter(bnum, cnum):
 def generate_all():
     """Go through all the books and chapters, generating text"""
     for book in range(len(books)):
-        for chap in range(len(book['chapters'])):
+        print(books[book]['long'])
+        for chap in range(1,len(books[book]['chapters'])):
+            print('...',books[book]['chapters'][chap]['title'])
             generate_chapter(book,chap)
 
