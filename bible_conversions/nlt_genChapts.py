@@ -1,4 +1,4 @@
-from rwt.books import books
+from rwt.books import books,target_lookup
 import itertools
 from html.parser import HTMLParser
 from io import StringIO
@@ -54,11 +54,26 @@ def make_long_link(bnum,cnum):
     l,c = books[bnum]['long'], books[bnum]['chapters'][cnum]['title']
     return f"[[{l} {c} (NLT)|{l} {c}]]"
 
+#  args: 1 = Title, 2 = ToC Link, 3 = prev link, 4 = next link
+def generate_intro_nav(bnum, cnum):
+    cbook = books[bnum]
+    test = cbook['testament']
+    if not test.startswith('Apoc'):
+        test = test + ' Testament'
+    prev_link = make_short_link(*prev_chap(bnum,cnum))
+    next_link = make_short_link(*next_chap(bnum,cnum))
+    return f'''{{{{Generic WikiBook Nav
+|1={cbook['long']} ({test})
+|2=[[New Living Translation (NLT)]]
+|3={prev_link}
+|4={next_link}
+}}}}'''
+
 def generate_nav(bnum, cnum):
     cbook = books[bnum]
     prev_link = make_short_link(*prev_chap(bnum,cnum))
     next_link = make_short_link(*next_chap(bnum,cnum))
-    return f'''{{{{Bible  {cbook['testament']} Nav
+    return f'''{{{{Bible {cbook['testament']} Nav
 |1=New Living Translation (NLT)
 |2={cbook['long']} {cbook['chapters'][cnum]['title']}
 |3={prev_link}
@@ -346,6 +361,8 @@ class TextSpan(ParseStrat):
         elif tag == 'a':
             if parent.attr(attrs,'id'):
                 return self  # skip on purpose!
+            if href := parent.attr(attrs,'href'):
+                return HRefLink(self, parent, href)
         elif tag == 'sup':
             match parent.attr(attrs,'class'):
                 case 'fract-num' | 'tn-fract-num':
@@ -371,6 +388,25 @@ class TextSpan(ParseStrat):
             self.close_action(parent)
             return self._prevState
         return self
+
+two_nums = re.compile(r'^[^_]+_\d+_(\d+)$') #anchors should end in two numbers
+class HRefLink(TextSpan):
+    """Handle a href= links to verses"""
+    def __init__(self, prevState, parent, href):
+        self._href = href
+        super().__init__(prevState, parent, 'a')
+    def open_action(self, parent):
+        match self._href.split('#',1):
+            case [tfile,anchor]:
+                if m := two_nums.match(anchor):
+                    vnum = m.group(1)
+                    parent.output(f"[[{target_lookup[tfile]}#V{vnum}|")
+                else:
+                    raise RuntimeError(f"Bad a href target anchor {anchor} to file {tfile}!")
+            case [tfile]:
+                parent.output(f"[[{target_lookup[tfile]}|")
+    def close_action(self, parent):
+        parent.output(']]')
 
 class RedText(TextSpan):
     def open_action(self,parent):
@@ -584,6 +620,167 @@ def parse_chapter(cfname, ofile):
         cp.feed(ifile.read())
         cp.close()
 
+# ~~~~~~~~~~~~~~~~ Parsing Intros ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+class DTSpan(TextSpan):
+    def open_action(self,parent):
+        parent.output(';')
+    def close_action(self,parent):
+        parent.output('\n')
+
+class DDSpan(TextSpan):
+    def open_action(self,parent):
+        parent.output(':')
+    def close_action(self,parent):
+        parent.output('\n')
+
+class TDSpan(TextSpan):
+    def open_action(self, parent):
+        parent.output('|')
+    def close_action(self,parent):
+        parent.output('\n')
+
+class OutlineTable(ParseStrat):
+    """Just output the <p>'s two by two"""
+    def __init__(self, prevState, parent):
+        self._prevState = prevState
+        parent.output('\n{| class="wikitable"\n')
+        self._tdCount = 0
+    def stag(self, parent, tag, attrs):
+        if tag == 'p':
+            self._tdCount += 1
+            if self._tdCount == 3:
+                parent.output('|-\n')
+                self._tdCount = 1
+            return TDSpan(self, parent, tag)
+        else:
+            return self
+    def etag(self,parent,tag):
+       if tag == 'table':
+           parent.output('|}\n\n')
+           return self._prevState
+       else:
+           return self
+
+class WaitForIntroP(ParseStrat):
+    """Waiting for a paragraph to appear in the intro html"""
+    def __init__(self):
+        self._found = False
+    def stag(self, parent, tag, attrs):
+        if tag == 'hr' and parent.attr(attrs,'class') == 'text-critical':
+            parent.end_poetry()
+            parent.output_notes()
+            parent.output('----\n\n')   
+            return self
+        elif tag == 'p':
+            self._found = True
+            clz = parent.attr(attrs,'class')
+            match clz:
+                case 'Intro-title': 
+                    self._found = False # not at the good stuff yet
+                    return self  #skip it!
+                case 'Intro-text':
+                    return Paragraph(self, parent, tag)
+                case 'Intro-note':
+                    return Paragraph(self, parent, tag)
+                case 'Stats-head':
+                    return DTSpan(self, parent, tag)
+                case 'Stats-text':
+                    return DDSpan(self, parent, tag)
+                case 'Outline-head':
+                    return SubHeading(self, parent, tag)
+                case _: 
+                    raise RuntimeError(f"unknown <p {attrs}> with unexpected class!")
+        elif tag == 'a' and parent.attr(attrs,'href') is None:
+            return self # just skip it silently
+        elif tag == 'table':
+            match parent.attr(attrs,'class'):
+                case 'ebook-as-is' | 'ebooks-as-is':
+                    return OutlineTable(self, parent)
+                case _:
+                    print(f'Unknown table class {clz}')
+        if self._found: print(f"intro just ignoring tag <{tag} {attrs}> after finding a paragraph...")
+        return self 
+
+class IntroParser(HTMLParser):
+    def __init__(self, ofile):
+        super().__init__()
+        self._ofile = ofile
+        self._state = WaitForIntroP() 
+        self._eating_whitespace = False
+        self._in_poetry = False
+        self._note_q = []
+        self._note_mgr = NotesManager()
+
+    def close(self):
+        super().close()
+        self.end_poetry()
+        self.output_notes()
+
+    def attr(self, attrs, key):
+        """Get the attribute from attrs matching `key`, or None"""
+        _,val = next(filter(lambda a: a[0] == key, attrs),(None,None)) 
+        # RWT print(f'Attributes are {attrs}, got {val} for {key}.')
+        return val
+
+    def eat_whitespace(self):
+        self._eating_whitespace = True
+
+    def start_poetry(self):
+        self._in_poetry = True
+
+    def space_poetry(self):
+        """When we get a -sp class, we need to space out the poetry, if we were already in it"""
+        if self._in_poetry:
+            self.output('\n\n') # should make a total of 3 newlines for 2 blank lines
+
+    def end_poetry(self):
+        """If we were in poetry, end it here"""
+        if self._in_poetry:
+            self._in_poetry = False
+            self.output('\n')
+
+    def output(self, s):
+        """Pass data to the output file"""
+        if self._eating_whitespace:
+            s = s.lstrip()
+            self._eating_whitespace = False
+        self._ofile.write(s)
+
+    def add_note(self, fname, noteid):
+        """Load all notes from fname (unless we already have) and
+        queue noteid for inclusion in the text"""
+        self._note_mgr.load_notes('OEBPS/' + fname)
+        self._note_q.append(noteid)
+
+    def output_notes(self):
+        """Output all queued notes"""
+        if len(self._note_q) == 0: return
+        self.output('<div style="background: #eeeeee; border-left: 2px solid black; padding: 0.5em;">')
+        for n in self._note_q:
+            self._ofile.write(self._note_mgr.get_note(n))
+            self._ofile.write('\n\n')
+        self.output('</div>\n\n')
+        self._note_q.clear()
+
+    def handle_starttag(self, tag, attrs):
+        self._state = self._state.stag(self, tag, attrs) 
+        # print('after start',tag,'now state is',self._state) #RWT
+
+    def handle_endtag(self, tag):
+        self._state = self._state.etag(self, tag) 
+        # print('after end',tag,'now state is',self._state) #RWT
+
+    def handle_data(self, data):
+        self._state = self._state.data(self, data) 
+        # print('after data',data[0:5],'now state is',self._state) #RWT
+
+def parse_intro(cfname, ofile):
+    """Parse the book intro given by `cfname`, writing wikitext to `ofile`"""
+    with open('OEBPS/' + cfname,'r') as ifile:
+        ip = IntroParser(ofile)
+        ip.feed(ifile.read())
+        ip.close()
+
 bs_and_is = re.compile(r'</i><i>|</b><b>',re.I)
 num_and_frac = re.compile(r'(\d+){{InlineFraction')
 
@@ -596,9 +793,13 @@ def fixup_wikitext(wt):
 def generate_chapter(bnum, cnum):
     """Generate a whole chapter's text"""
     with StringIO() as chap_buff, open(make_chapter_filename(bnum,cnum),'w') as ofile:
-        print(generate_nav(bnum,cnum),file=chap_buff)
-        parse_chapter(books[bnum]['chapters'][cnum]['file'],chap_buff)
-        print(f'\n&rarr; {make_long_link(*next_chap(bnum,cnum))} &rarr;',file=chap_buff)
+        if cnum == 0:
+            print(generate_intro_nav(bnum,cnum),file=chap_buff)
+            parse_intro(books[bnum]['chapters'][cnum]['file'],chap_buff)
+        else:
+            print(generate_nav(bnum,cnum),file=chap_buff)
+            parse_chapter(books[bnum]['chapters'][cnum]['file'],chap_buff)
+        print(f'&rarr; {make_long_link(*next_chap(bnum,cnum))} &rarr;',file=chap_buff)
         print('[[Category:Bible Texts (NLT)]]', file=chap_buff)
         contents = fixup_wikitext(chap_buff.getvalue())
         ofile.write(contents)
@@ -607,7 +808,13 @@ def generate_all():
     """Go through all the books and chapters, generating text"""
     for book in range(len(books)):
         print(books[book]['long'])
-        for chap in range(1,len(books[book]['chapters'])):
+        for chap in range(len(books[book]['chapters'])):
             print('...',books[book]['chapters'][chap]['title'])
             generate_chapter(book,chap)
+
+def generate_intros():
+    """Go through all the books and chapters, generating text"""
+    for book in range(len(books)):
+        print(books[book]['long'], books[book]['chapters'][0]['file'])
+        generate_chapter(book,0)
 
