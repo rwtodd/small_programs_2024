@@ -9,7 +9,14 @@ ODIR='out'
 # ~~~~~~~
 def vnum(n):
     """Generate a verse number string for the text"""
-    return f'<span id="V{n}"><sup>\'\'\'{n}\'\'\'</sup></span>&nbsp;'
+    match n.split('-'):
+        case [vstart,vend]:
+            anchors = ''.join(f'<span id="V{x}"></span>' for x in range(int(vstart),int(vend)))
+            return anchors + f'<span id="V{vend}"><sup>\'\'\'{n}\'\'\'</sup></span>&nbsp;'
+        case [vnum]:
+            return f'<span id="V{n}"><sup>\'\'\'{n}\'\'\'</sup></span>&nbsp;'
+        case _:
+            raise RuntimeError(f"vnum called on {n}!")
 
 def heading(title):
     """Generate a heading in the text"""
@@ -183,23 +190,32 @@ class NotesManager(HTMLParser):
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Body Text ParseStrats ~~~~~~~~~~~~~~~~~~~~
 class WaitForP(ParseStrat):
     """Waiting for a paragraph to appear"""
+    def __init__(self):
+        self._found = False
     def stag(self, parent, tag, attrs):
         if tag == 'hr' and parent.attr(attrs,'class') == 'text-critical':
             parent.end_poetry()
             parent.output_notes()
             parent.output('----\n\n')   
+            return self
         elif tag == 'p':
+            self._found = True
             clz = parent.attr(attrs,'class')
-            # if it is not
             match clz:
+                case None:
+                    return Paragraph(self, parent)
                 case 'subhead':
                     return SubHeading(self, parent)
                 case 'chapter-number': 
+                    self._found = False # not at the good stuff yet
                     return self  #skip it!
                 case p if p.find('poet') >= 0 or p.find('list') >= 0:
                     return PoetryParagraph(self, parent, p.split('-'))
                 case _: 
                     return Paragraph(self, parent)
+        elif tag == 'a' and parent.attr(attrs,'href') is None:
+            return self # just skip it silently
+        if self._found: print(f"just ignoring tag <{tag} {attrs}> after finding a paragraph...")
         return self 
 
 class VerseNumber(ParseStrat):
