@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import fileinput
 from rwt import wikitoc
 
 parser = argparse.ArgumentParser(description="Convert an XML representation to a wikibook table of contents")
@@ -45,7 +44,7 @@ if args.page_wrappers:
         print(wb.generate_page_template(n))
 
 if args.skeleton_files:
-    with open('table-of-contents.wikitext') as f:
+    with open('table-of-contents.wikitext', 'w') as f:
         f.write(wb.generate_toc())
 
     for n in range(len(wb)):
@@ -53,3 +52,4 @@ if args.skeleton_files:
         with open(fname,'w') as f:
             f.write(wb.generate_page_template(n))
 
+# vim: ft=python
