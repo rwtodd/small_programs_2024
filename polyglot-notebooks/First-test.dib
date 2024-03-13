@@ -26,3 +26,42 @@ foreach(var (num,idx) in g.Zip(Enumerable.Range(1,10)))
 #!markdown
 
 ... very satisfying.
+
+#!csharp
+
+System.IO.Directory.GetCurrentDirectory()
+
+#!markdown
+
+... ok, so it seems to set the current directory to the location of the .dib file.  So I should be able to load some test data.
+
+#!csharp
+
+var td = System.IO.File.ReadAllBytes("first-test.data");
+td
+
+#!markdown
+
+We sure can!
+
+#!csharp
+
+Encoding.UTF8.GetString(td)
+
+#!markdown
+
+## DLLs
+Let's see if I can point it to a DLL and load it...
+
+#!csharp
+
+#r "../../small-csharp-libs/romanized-text/RWTodd.RomanizedText/RWTodd.RomanizedText.dll"
+
+#!csharp
+
+using RWTodd.RomanizedText;
+Greek.Convert("THELEMA")
+
+#!markdown
+
+... yes I can!  It works ok.
