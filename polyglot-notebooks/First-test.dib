@@ -1,0 +1,28 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
+
+#!markdown
+
+# Test Notebook
+I want to see how the C# notebooks work (using the `Polyglot` extension in VS Code)...
+
+#!csharp
+
+var range = Enumerable.Range(0,50);
+var g = from n in range where n > 2 select n*n;
+
+#!markdown
+
+So this is how it starts.  Now, let's see how it ends!
+
+#!csharp
+
+foreach(var (num,idx) in g.Zip(Enumerable.Range(1,10)))
+{
+    Console.WriteLine($"{idx}: {num}");
+}
+
+#!markdown
+
+... very satisfying.
