@@ -10,11 +10,13 @@ I want to find the two best five-letter words to open with, in terms of letter f
 #!csharp
 
 using System.Linq;
+var homedir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+var wordsFile = System.IO.Path.Combine(homedir,"OneDrive","DataFiles","words.txt");
 
 #!csharp
 
 // get the five-letter words
-var fivers = (from word in System.IO.File.ReadLines("/usr/share/dict/words")
+var fivers = (from word in System.IO.File.ReadLines(wordsFile)
     where word.Length == 5 
     select word.ToLower()).ToArray();
 fivers.Length
