@@ -1,0 +1,237 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
+
+#!markdown
+
+# Wordle Opening Words
+I want to find the two best five-letter words to open with, in terms of letter frequency.  We'll start by grabbing all 5-letter words.
+
+#!csharp
+
+using System.Linq;
+
+#!csharp
+
+// get the five-letter words
+var fivers = (from word in System.IO.File.ReadLines("/usr/share/dict/words")
+    where word.Length == 5 
+    select word.ToLower()).ToArray();
+fivers.Length
+
+#!markdown
+
+There's 10,239 of them!  Ok... now I'm going to determine the relative frequency of each letter in these 5-letter words.  That might be better than using the standard frequencies, which would be biased toward smaller words (possibly?)
+
+#!csharp
+
+var lcount = new Dictionary<char, Int64>();
+foreach(var letter in "abcdefghijklmnopqrstuvwxyz") { lcount[letter] = 0; }
+foreach(var letter in (from word in fivers 
+                        from letter in word
+                        select letter)) {
+    lcount[letter] += 1;
+}
+
+#!markdown
+
+So, now we have relative scores for each letter.  Here are the top 10:
+
+#!csharp
+
+lcount.OrderByDescending(x => x.Value).Take(10)
+
+#!markdown
+
+## Finding Words
+Now, we need pairs of words, and a way to score them.
+
+Scoring them should follow these criteria:
+
+* collect the set of letters in the word (that way, a letter doesn't count twice)
+* sum the values from lcount across the set
+
+The pair of words with the highest score wins.  We'll keep the top 5.
+
+#!csharp
+
+Int64 score(string s1, string s2, Dictionary<char,Int64> values) => 
+    new HashSet<char>(s1.Concat(s2)).Sum(l => values[l]);
+
+#!csharp
+
+PriorityQueue<(string,string), Int64> calculate(string[] wordlist, Dictionary<char,Int64> values) {
+    var winners = new PriorityQueue<(string,string),Int64>(6);
+    foreach(var _ in Enumerable.Range(0,5)) { winners.Enqueue(("dummy","dummy"), 0); }
+    foreach(var (words,s) in (
+        from word1 in fivers
+        from word2 in fivers
+        select ((word1,word2),score(word1,word2, values)))) {
+            winners.EnqueueDequeue(words, s);
+    }
+    return winners;
+}
+
+#!csharp
+
+calculate(fivers, lcount)
+
+#!markdown
+
+So, "alien" and "roust" is the top winner for letter frequency.
+
+#!markdown
+
+## Consonant-only
+We had been using starting words designed to get all the vowels, and were wondering if just getting as many consonants as possible isn't the better strategy.  So, let's zero-out the values for the vowels and see what the best words are.
+
+#!csharp
+
+var consonants = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "aeiou") { consonants[letter] = 0; }
+calculate(fivers, consonants)
+
+#!markdown
+
+So without the vowels, "darts" and "lynch" are the best starting words.   But, what if we consider "Y" a vowel?
+
+#!csharp
+
+var nowhy = new Dictionary<char,Int64>(consonants);
+nowhy['y'] = 0;
+calculate(fivers, nowhy)
+
+#!markdown
+
+So, "mends" and "clart" are both accepted by Wordle.
+
+#!markdown
+
+## Summary so Far
+
+"Alien" "roust" => "a,e,i,l,n,o,r,s,t,u"
+
+"darts" "lynch" => "a,c,d,h,l,n,r,s,t,y"
+
+"mends" "clart" => "a,c,d,e,l,m,n,r,s,t"
+
+#!markdown
+
+## Third, Fourth, Fifth Words
+What happens if "darts" and "lynch" don't give you much to go on?  What is the best third word that eats up as many high-value letters as possible?
+
+I'll just zero out "dartslynch" and see...
+
+#!csharp
+
+var thirdwordvals = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "dartslynchiou") { thirdwordvals[letter] = 0; }
+PriorityQueue<string, Int64> calculate1(string[] wordlist, Dictionary<char,Int64> values) {
+    var winners = new PriorityQueue<string,Int64>(6);
+    foreach(var _ in Enumerable.Range(0,5)) { winners.Enqueue("dummy", 0); }
+    foreach(var (words,s) in (
+        from word1 in fivers
+        select (word1,score(word1,word1, values)))) {
+            winners.EnqueueDequeue(words, s);
+    }
+    return winners;
+}
+calculate1(fivers, thirdwordvals)
+
+#!markdown
+
+Ok, so let's take "pombe" as the best third word... how about a fourth...
+
+#!csharp
+
+var fourthwrd = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "dartslynchpombe") { fourthwrd[letter] = 0; }
+calculate1(fivers,fourthwrd)
+
+#!markdown
+
+alright, let's choose "fungi"... and for word five?
+
+#!csharp
+
+var fifthword = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "dartslynchpombefungi") { fifthword[letter] = 0; }
+calculate1(fivers,fifthword)
+
+#!markdown
+
+... quawk it is!
+
+#!markdown
+
+## Words Three and Four as a Unit
+Instead of picking three and four one at a time, what if we optimize three and four as a unit, just like we did one and two?
+
+#!csharp
+
+var vals34 = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "dartslynch") { vals34[letter] = 0; }
+calculate(fivers, vals34)
+
+#!csharp
+
+var vals34_2 = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "dartslynchaeiou") { vals34_2[letter] = 0; }
+calculate(fivers, vals34_2)
+
+#!markdown
+
+Interestingly, it doesn't seem like this gets you better results than 'pombe' and 'fungi' did.
+
+#!markdown
+
+## Conclusion
+Pick words in this order:
+
+1. darts
+1. lynch
+1. pombe
+1. fungi
+1. quawk
+
+... until you have a clue what to pick.  If you are clueless all the way, then after these five quesses, only the Z, X, V,and J will be left unchecked for your final guess.
+
+#!markdown
+
+## Addendum
+Linda doesn't like 'd'.  So...
+
+#!csharp
+
+var consonants = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "aeioud") { consonants[letter] = 0; }
+calculate(fivers, consonants)
+
+#!markdown
+
+Ok, so let's start wiht lynch and smart.  Then we get "biped", "okrug", and "awful"  and are left with QZXVJ.
+
+#!markdown
+
+## Addendum 2
+Let's forget vowels... start with "alien" and "roust"... what's the best third word?
+
+#!csharp
+
+var vals3 = new Dictionary<char,Int64>(lcount);
+foreach(char letter in "alienroust") { vals3[letter] = 0; }
+calculate1(fivers, vals3)
+
+#!markdown
+
+... it's "duchy".
+
+#!markdown
+
+## Final Conclusion
+
+So... the three candidate word sets are:
+
+1. darts,lynch,pombe,fungi,quawk
+1. smart,lynch,biped,okrug,awful
+1. alien,roust,duchy
