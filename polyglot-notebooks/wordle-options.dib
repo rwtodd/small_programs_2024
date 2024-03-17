@@ -9,7 +9,11 @@ I want to find the two best five-letter words to open with, in terms of letter f
 
 #!csharp
 
-using System.Linq;
+#r "nuget:ScottPlot, 5.0.*"
+using Microsoft.DotNet.Interactive.Formatting;
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(500, 400)), HtmlFormatter.MimeType);
+
 var homedir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 var wordsFile = System.IO.Path.Combine(homedir,"OneDrive","DataFiles","words.txt");
 
@@ -37,11 +41,19 @@ foreach(var letter in (from word in fivers
 
 #!markdown
 
-So, now we have relative scores for each letter.  Here are the top 10:
+So, now we have relative scores for each letter.  Here is a graph of their % representation.
 
 #!csharp
 
-lcount.OrderByDescending(x => x.Value).Take(10)
+ScottPlot.Plot plt = new();
+var keys = (from key in lcount.Keys orderby key select key).ToArray();
+plt.Add.Bars((from key in keys select 100.0*lcount[key]/(5*fivers.Length)).ToArray());
+plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(
+    keys.Select((k,n) => new ScottPlot.Tick(n, k.ToString())).ToArray());
+plt.Axes.Bottom.MajorTickStyle.Length = 0;
+plt.HideGrid();
+plt.Axes.Margins(bottom: 0);
+plt
 
 #!markdown
 
