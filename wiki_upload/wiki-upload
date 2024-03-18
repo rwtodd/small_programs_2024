@@ -6,7 +6,7 @@ import os
 import sys
 import rwt.wikiapi as wiki
 
-IMAGE_EXTS = { '.jpg', '.jpeg', '.png', '.gif' }
+IMAGE_EXTS = wiki.image_extensions()
 
 def gather_credentials(fname):
     """Get credentials from a json file"""
@@ -33,25 +33,37 @@ def perform_uploads(session, files, comment):
             check_response(session.edit_from_file(file, expanded_comment))
         print(file)  # print a running list of files, which makes it easy to remove them if needed
 
-def perform_download(session, title, as_html):
-    """Download from the loggen in WikiSession"""
+def perform_download(session, title: str, as_html):
+    """Download from the logged in WikiSession"""
     if as_html:
+        ext = 'html'
         resp, text = session.fetch_html(title)
     else:
+        ext = 'wikitext'
         resp, text = session.fetch_wikitext(title)
     check_response(resp)
-    print(text)
+    with open(f"{title.replace(' ','_')}.{ext}", 'w') as outf:
+        outf.write(text)
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Upload files to a mediawiki")
     parser.add_argument('-c','--credentials', type=str, default="un_pw.json", help="A JSON file of credentials (default: un_pw.json)")
+    parser.add_argument('--example-creds', action="store_true", help="write an example JSON credentials file to stdout")
     parser.add_argument('-s','--summary', type=str, default="Uploaded file {}", help="A summary comment to use for the files. {} == filename")
     parser.add_argument('-f','--fetch', metavar='TITLE', type=str, help="Fetch an article")
     parser.add_argument('--html', action="store_true", help="Fetch as html instead of wikitext")
     parser.add_argument('filename', type=str, default=None, nargs='*')
 
     args = parser.parse_args()
+    if(args.example_creds):
+        print("""# example credentials .json:
+{
+   "url": "https:/blah/api.php",
+   "uname": "username",
+   "pw": "password"
+}""")
+        exit(1)
     creds = gather_credentials(args.credentials)
     with wiki.WikiSession(creds['url']) as ws:
         check_response(ws.login(creds['uname'], creds['pw']))
