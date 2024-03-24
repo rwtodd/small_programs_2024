@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import json
+import os
+import re
+import platform
+from datetime import timedelta
+from typing import Any, List, Tuple
+
+fname_cleaner = re.compile(r'[^a-zA-Z0-9]+')
+frate_allowable = re.compile(r'^[0-9/]+$')
+
+def get_ffprobe_metadata(filename: str) -> dict[str,Any]:
+    """Extracts metadata from a video file using ffprobe."""
+    cmd = [
+        'ffprobe',
+        '-v', 'quiet',  # Reduce verbosity
+        '-print_format', 'json',
+        '-show_format', '-show_streams',
+        filename
+    ]
+    output = subprocess.run(cmd, check=True, stdout=subprocess.PIPE).stdout
+    return json.loads(output)
+
+def non_jpeg_video(s: dict[str,Any]) -> bool:
+    """Determine if a stream `s` is a video stream that's not jpeg"""
+    return s['codec_type'] == 'video' and not s['codec_name'].endswith('jpeg')
+
+def audio(s: dict[str,Any]) -> bool:
+    """Determine if a stream `s` is an audio stream"""
+    return s['codec_type'] == 'audio'
+
+def convert_file(filename: str, metadata: dict[str,Any], opts: argparse.Namespace) -> None:
+    """Convert one video to hevc mp4"""
+    filters: List[str] = []
+    frate_cmds: List[str] = []
+    skip_cmds: List[str] = []
+    audio_cmds: List[str] = []
+    crf = opts.crf
+    if opts.denoise: filters.append('hqdn3d')
+
+    basename, ext = os.path.splitext(os.path.basename(filename))
+    outname = fname_cleaner.sub('_',basename) + '.mp4'
+    
+    if opts.skip: skip_cmds.extend(['-ss', str(opts.skip)])
+
+    # look at the first non-jpeg stream... ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    vid_stream = next(filter(non_jpeg_video, metadata['streams']), None)
+    if not vid_stream:
+        raise ValueError("file nas no video stream!")
+    
+    print(f'Video Codec: {vid_stream['codec_name']}')
+
+    print(f'Dimensions = {vid_stream['width']} x {vid_stream['height']}')
+    if not opts.keep_large and int(vid_stream['height']) > 720:
+        filters.append("scale=-1:720,crop='iw-mod(iw,2)':'ih-mod(ih,2)'")
+        crf = crf - 1 # improve crf when down-scaling
+    
+    print(f'pix_fmt = {vid_stream['pix_fmt']}')
+    if not opts.keep_pix and vid_stream['pix_fmt'] != 'yuv420p':
+        filters.append("format=yuv420p")
+
+    frate = vid_stream['r_frame_rate']
+    if frate_allowable.fullmatch(frate):
+        frate = eval(frate)
+        print(f'Frame rate: {frate}')
+        if not opts.keep_framerate and frate > 30.0: frate_cmds.extend(['-r','30'])
+    else:
+        print(f'Bad frame rate string {frate}, assuming it is ok...')
+    
+    # audio stuff ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    aud_stream = next(filter(audio, metadata['streams']), None)
+    if aud_stream:
+        print(f'Audio Codec: {aud_stream["codec_name"]}')
+        if not opts.encode_audio and aud_stream['codec_name'] == 'aac':
+            audio_cmds.extend(['-c:a', 'copy'])
+        else:
+            audio_cmds.extend(['-ac', str(opts.achannels), '-c:a'])
+            match platform.system():
+                case 'Darwin': audio_cmds.append('aac_at')
+                case _: audio_cmds.append('aac')
+            audio_cmds.extend(['-b:a', str(opts.arate)])
+    else:
+        audio_cmds.extend(['-c:a', 'copy']) # just in case...
+
+    # now, assemble the command...  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-stats', 
+           *skip_cmds, '-i', filename, '-sn' ]
+    if filters:
+        cmd.append('-vf')
+        cmd.extend(filters)
+    cmd.append('-c:v')
+    if vid_stream['codec_name'] == 'hevc' and not (filters or frate_cmds):
+        cmd.append('copy')
+    else:
+        cmd.extend(['libx265', *frate_cmds, '-crf', str(crf), '-x265-params', 'log-level=error'])
+    cmd.extend(['-tag:v', 'hevc1'])
+    cmd.extend(audio_cmds)
+    cmd.extend(['-dn' '-map_chapters' '-1'])
+    if opts.length: cmd.extend(['-to', str(opts.length)])
+    if opts.force: cmd.append('-y')
+    cmd.append(outname)
+
+    if opts.dryrun:
+        print('Command:', ' '.join(cmd))
+    else:
+        if not opts.force and os.path.exists(outname):
+            print(f'{outname} already exists, skipping!')
+        else:
+            subprocess.run(cmd, check=True) 
+    
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Convert a video file to an hevc mp4 with no chapters or subtitles')
+    parser.add_argument('--dryrun', action='store_true', help="Don't actually convert; just print the ffmpeg command-line.")
+    parser.add_argument('--skip', type=int, default=0, help='Skip seconds from start of the video')
+    parser.add_argument('--length', type=int, default=0, help='Only encode this many seconds')
+    parser.add_argument('--crf', type=int, default=25, help='CRF (quality) level for video encoding. Lower is better. (default 25)')
+    parser.add_argument('--encode-audio', action='store_true', help='Force re-encode of audio')
+    parser.add_argument('--keep-large', action='store_true', help='Do not re-encode video due to height')
+    parser.add_argument('--keep-pix', action='store_true', help='Do not re-encode video due to pixel format')
+    parser.add_argument('--keep-framerate', action='store_true', help='Do not re-encode video due to high frame-rate')
+    parser.add_argument('--achannels', type=int, default=1, help='How many audio channels (default 1)')
+    parser.add_argument('--arate', type=int, default=96000, help='Audio bps rate (default 96000)')
+    parser.add_argument('--force', action='store_true', help='Overwrite existing files')
+    parser.add_argument('--denoise', action='store_true', help='Apply a blur/smoothing filter to the video')    
+    parser.add_argument('filenames', nargs='+', help='Paths to the video files')
+
+    args = parser.parse_args()
+    try:
+        for filename in args.filenames:
+            metadata = get_ffprobe_metadata(filename)
+            print(f"=== {filename} File Format ===")
+            print(f"Format: {metadata['format']['format_name']}")
+            print(f"Duration: {timedelta(seconds=float(metadata['format']['duration']))}")
+            convert_file(filename, metadata, args)
+    except Exception as e:
+        raise SystemExit(f"Encountered error: {e}")
+    
