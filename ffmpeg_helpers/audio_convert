@@ -43,7 +43,8 @@ if __name__ == "__main__":
     parser.add_argument('--lowpass', type=int, help='in Hz, a lowpass filter')
     parser.add_argument('--input', default='flac', help='Extension of the files we will convert (default flac)')
     parser.add_argument('--force', action='store_true', help='Overwrite existing files')
-    parser.add_argument('--podcast', action='store_true', help='Set options for podcast (mono, -q0, 22.05kHz, 8000Hz lowpass)')
+    parser.add_argument('--podcast', action='store_true', help='Set options for podcast (mono, -q0, 22.05kHz, 8000Hz lowpass, 1.5speed)')
+    parser.add_argument('--tempo', type=float, default=None, help='Tempo factor (1.5 = 1.5x-speed, etc)')
     parser.add_argument('directory', type=str, nargs='?', help='Root directory to search for files.')
     args = parser.parse_args()
     if args.levels:
@@ -58,12 +59,15 @@ if __name__ == "__main__":
         print(f'Going to process {len(workload)} files ending in {extension} under the directory {args.directory}')
         if args.podcast:
             inopts = ['-ac', '1', '-ar', '22050']
-            outopts = ['-q:a', str(args.quality or 0), '-cutoff', str(args.lowpass or 8000)]
+            outopts = ['-q:a', str(args.quality or 0), '-cutoff', str(args.lowpass or 8000),
+                       '-filter:a', f'atempo={args.tempo or 1.5}']
         else:
             inopts = []
             outopts = ['-q:a', str(args.quality or 6.0)]
             if args.lowpass:
                 outopts.extend(['-cutoff', str(args.lowpass)])
+            if args.tempo:
+                outopts.extend(['-filter:a', f'atempo={args.tempo}'])
         file_converter = partial(convert_file, inopts=inopts, outopts=outopts, force=bool(args.force))
         with multiprocessing.Pool() as pool:
             results = pool.map(file_converter, workload)
