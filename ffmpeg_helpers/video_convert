@@ -134,6 +134,7 @@ if __name__ == "__main__":
             print(f"=== {filename} File Format ===")
             print(f"Format: {metadata['format']['format_name']}")
             print(f"Duration: {timedelta(seconds=float(metadata['format']['duration']))}")
+            print(f'kbps = {float(metadata['format']['size'])*8 / float(metadata['format']['duration']) / 1000.0 : 0.2f}')
             convert_file(filename, metadata, args)
     except Exception as e:
         raise SystemExit(f"Encountered error: {e}")
