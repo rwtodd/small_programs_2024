@@ -58,11 +58,11 @@ if __name__ == "__main__":
             workload.extend(os.path.join(root,file) for file in files if file.lower().endswith(extension))
         print(f'Going to process {len(workload)} files ending in {extension} under the directory {args.directory}')
         if args.podcast:
-            inopts = ['-ac', '1', '-ar', '22050']
+            inopts = ['-ac', '1', '-ar', '22050', '-map', '0:a']
             outopts = ['-q:a', str(args.quality or 0), '-cutoff', str(args.lowpass or 8000),
                        '-filter:a', f'atempo={args.tempo or 1.5}']
         else:
-            inopts = []
+            inopts = ['-map', '0:a']
             outopts = ['-q:a', str(args.quality or 6.0)]
             if args.lowpass:
                 outopts.extend(['-cutoff', str(args.lowpass)])

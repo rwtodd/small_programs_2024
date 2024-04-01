@@ -96,9 +96,9 @@ def convert_file(filename: str, metadata: dict[str,Any], opts: argparse.Namespac
         cmd.append('copy')
     else:
         cmd.extend(['libx265', *frate_cmds, '-crf', str(crf), '-x265-params', 'log-level=error'])
-    cmd.extend(['-tag:v', 'hevc1'])
+    cmd.extend(['-tag:v', 'hvc1'])
     cmd.extend(audio_cmds)
-    cmd.extend(['-dn' '-map_chapters' '-1'])
+    cmd.extend(['-dn', '-map_chapters', '-1'])
     if opts.length: cmd.extend(['-to', str(opts.length)])
     if opts.force: cmd.append('-y')
     cmd.append(outname)
