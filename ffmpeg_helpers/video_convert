@@ -73,8 +73,9 @@ def convert_file(filename: str, metadata: dict[str,Any], opts: argparse.Namespac
     # audio stuff ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     aud_stream = next(filter(audio, metadata['streams']), None)
     if aud_stream:
-        print(f'Audio Codec: {aud_stream["codec_name"]}')
-        if not opts.encode_audio and aud_stream['codec_name'] == 'aac':
+        acodec,achans = aud_stream["codec_name"], int(aud_stream["channels"])
+        print(f'Audio Codec: {acodec} ({achans} channels)')
+        if opts.keep_audio or (not opts.encode_audio and acodec == 'aac' and achans <= 2):
             audio_cmds.extend(['-c:a', 'copy'])
         else:
             audio_cmds.extend(['-ac', str(opts.achannels), '-c:a'])
@@ -90,7 +91,7 @@ def convert_file(filename: str, metadata: dict[str,Any], opts: argparse.Namespac
            *skip_cmds, '-i', filename, '-sn' ]
     if filters:
         cmd.append('-vf')
-        cmd.extend(filters)
+        cmd.append(','.join(filters))
     cmd.append('-c:v')
     if vid_stream['codec_name'] == 'hevc' and not (filters or frate_cmds):
         cmd.append('copy')
@@ -117,10 +118,11 @@ if __name__ == "__main__":
     parser.add_argument('--skip', type=int, default=0, help='Skip seconds from start of the video')
     parser.add_argument('--length', type=int, default=0, help='Only encode this many seconds')
     parser.add_argument('--crf', type=int, default=25, help='CRF (quality) level for video encoding. Lower is better. (default 25)')
-    parser.add_argument('--encode-audio', action='store_true', help='Force re-encode of audio')
     parser.add_argument('--keep-large', action='store_true', help='Do not re-encode video due to height')
     parser.add_argument('--keep-pix', action='store_true', help='Do not re-encode video due to pixel format')
     parser.add_argument('--keep-framerate', action='store_true', help='Do not re-encode video due to high frame-rate')
+    parser.add_argument('--keep-audio', action='store_true', help='Copy the audio, no matter what it is')
+    parser.add_argument('--encode-audio', action='store_true', help='Force re-encode of audio')
     parser.add_argument('--achannels', type=int, default=1, help='How many audio channels (default 1)')
     parser.add_argument('--arate', type=int, default=96000, help='Audio bps rate (default 96000)')
     parser.add_argument('--force', action='store_true', help='Overwrite existing files')
