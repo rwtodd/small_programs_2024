@@ -90,7 +90,7 @@ def convert_file(filename: str, metadata: dict[str,Any], opts: argparse.Namespac
            *skip_cmds, '-i', filename, '-sn' ]
     if filters:
         cmd.append('-vf')
-        cmd.extend(filters)
+        cmd.append(','.join(filters))
     cmd.append('-c:v')
     if vid_stream['codec_name'] == 'hevc' and not (filters or frate_cmds):
         cmd.append('copy')
