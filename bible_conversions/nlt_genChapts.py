@@ -440,13 +440,13 @@ class InlineFraction(ParseStrat):
                 case 'fract-slash' | 'tn-fract-slash' | 'tn-fract-ital-slash':
                     return self
                 case _:
-                    raise RuntimeError(f"Got tag <{tag} {attr}> when looking for a fraction flash type!")
+                    raise RuntimeError(f"Got tag <{tag} {attrs}> when looking for a fraction flash type!")
         elif self._phase == self.DENOM:
             match clz:
                 case 'fract-den' | 'tn-fract-den' | 'tn-fract-ital-den':
                     return self
                 case _:
-                    raise RuntimeError(f"Got tag <{tag} {attr}> when looking for a fraction denominator type!")
+                    raise RuntimeError(f"Got tag <{tag} {attrs}> when looking for a fraction denominator type!")
     def etag(self, parent, tag):
         if tag != self._tag:
             raise RuntimeError(f"parsing fraction, got tag </{tag}> when expecting </{self._tag}>")
