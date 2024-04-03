@@ -5,6 +5,7 @@ I make a new repository each year for these.
 
 <dl>
 <dt>bible_conversions</dt><dd>Scripts I used for converting epub bibles to wikitext</dd>
+<dt>ffmpeg_helpers</dt><dd>Scripts to help run my common ffmpeg tasks</dd>
 <dt>polyglot-notebooks</dt><dd>Any C#/polyglot notebooks I may or may not write</dd>
 <dt>python-notebooks</dt><dd>Jupyter notebooks I may or may not write</dd>
 <dt>romanized_cli</dt><dd>Python driver program for the rwt.romanized library (see small_python_packages repo)</dd>
