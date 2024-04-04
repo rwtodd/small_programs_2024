@@ -97,6 +97,8 @@ def convert_file(filename: str, metadata: dict[str,Any], opts: argparse.Namespac
         cmd.append('copy')
     else:
         cmd.extend(['libx265', *frate_cmds, '-crf', str(crf), '-x265-params', 'log-level=error'])
+        if opts.slower:
+            cmd.extend(['-preset', 'slow'])
     cmd.extend(['-tag:v', 'hvc1'])
     cmd.extend(audio_cmds)
     cmd.extend(['-dn', '-map_chapters', '-1'])
@@ -128,6 +130,7 @@ if __name__ == "__main__":
     parser.add_argument('--force', action='store_true', help='Overwrite existing files')
     parser.add_argument('--denoise', action='store_true', help='Apply a blur/smoothing filter to the video')    
     parser.add_argument('filenames', nargs='+', help='Paths to the video files')
+    parser.add_argument('--slower', action='store_true', help='encode slower for hopefully better quality per bitrate')
 
     args = parser.parse_args()
     try:
