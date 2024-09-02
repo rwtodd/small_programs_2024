@@ -40,6 +40,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Convert all audio files below the given directory to Ogg Vorbis')
     parser.add_argument('--quality', type=float,  help='Quality setting (see --levels for help) (defualt: 6.0)')
     parser.add_argument('--levels', action='store_true', help='Display a table of Q-Levels and their target bit-rates')
+    parser.add_argument('--arate', type=int, help='in Hz, the audio rate (such as 44100 for CD-quality)')
     parser.add_argument('--lowpass', type=int, help='in Hz, a lowpass filter')
     parser.add_argument('--input', default='flac', help='Extension of the files we will convert (default flac)')
     parser.add_argument('--force', action='store_true', help='Overwrite existing files')
@@ -64,6 +65,8 @@ if __name__ == "__main__":
         else:
             inopts = ['-map', '0:a']
             outopts = ['-q:a', str(args.quality or 6.0)]
+            if args.arate:
+                inopts.extend['-ar', str(args.arate)]
             if args.lowpass:
                 outopts.extend(['-cutoff', str(args.lowpass)])
             if args.tempo:
