@@ -26,4 +26,9 @@ public enum CheckResult {
     public boolean byFive() {
         return this.equals(FailBy5) || this.equals(PassBy5);
     }
+
+    /**
+     * just tell me if the result is a kind of pass...
+     */
+    public boolean isAPass() { return this == Pass || this == PassBy5; }
 }

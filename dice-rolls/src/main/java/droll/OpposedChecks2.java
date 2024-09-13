@@ -36,8 +36,6 @@ public class OpposedChecks2 {
         int rollB = middleNumber(rng.nextInt(1, 21), rng.nextInt(1, 21), rng.nextInt(1, 21));
         int diff = (scoreA - rollA) - (scoreB - rollB);
         int diff2 = (scoreA + rollA) - (scoreB + rollB);
-        System.err.printf("rollA %d and rollB %d\n", rollA, rollB);
-        System.err.printf("diff1 %d and diff2 %d\n", diff, diff2);
         return CheckResult.of(diff2);
     }
 
@@ -72,5 +70,9 @@ public class OpposedChecks2 {
 
         System.out.printf("!Fail %.1f (Fb5 %.1f F %.1f) / T %.1f / Pass %.1f (P %.1f Pb5 %.1f)\n",
                 (fb5 + f) / 640_000.0, fb5 / 640_000.0, f / 640_000.0, t / 640_000.0, (pb5 + p) / 640_000.0, p / 640_000.0, pb5 / 640_000.0);
+    }
+
+    public static void twoOfThree(int scoreA, int scoreB) {
+        Dice.trialsOf2OutOf3(50_000, scoreA, scoreB, OpposedChecks2::run);
     }
 }
